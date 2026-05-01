@@ -1,8 +1,9 @@
 package model
 
 import (
-	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/grafana/grafana/pkg/services/sqlstore/migrator"
 )
@@ -68,7 +69,54 @@ func (s HitList) Less(i, j int) bool {
 		return false
 	}
 
-	return strings.ToLower(s[i].Title) < strings.ToLower(s[j].Title)
+	return compareLowerCase(s[i].Title, s[j].Title) < 0
+}
+
+// compareLowerCase compares two strings case-insensitively without allocating.
+// Returns <0 if a<b, 0 if a==b, >0 if a>b (comparing lowercased runes).
+func compareLowerCase(a, b string) int {
+	for len(a) > 0 && len(b) > 0 {
+		var la, lb rune
+
+		// Fast path for ASCII (covers the vast majority of dashboard titles)
+		if a[0] < utf8.RuneSelf {
+			la = rune(a[0])
+			if la >= 'A' && la <= 'Z' {
+				la += 'a' - 'A'
+			}
+			a = a[1:]
+		} else {
+			r, size := utf8.DecodeRuneInString(a)
+			la = unicode.ToLower(r)
+			a = a[size:]
+		}
+
+		if b[0] < utf8.RuneSelf {
+			lb = rune(b[0])
+			if lb >= 'A' && lb <= 'Z' {
+				lb += 'a' - 'A'
+			}
+			b = b[1:]
+		} else {
+			r, size := utf8.DecodeRuneInString(b)
+			lb = unicode.ToLower(r)
+			b = b[size:]
+		}
+
+		if la != lb {
+			if la < lb {
+				return -1
+			}
+			return 1
+		}
+	}
+	if len(a) < len(b) {
+		return -1
+	}
+	if len(a) > len(b) {
+		return 1
+	}
+	return 0
 }
 
 const (

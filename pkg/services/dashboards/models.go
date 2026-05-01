@@ -1,7 +1,6 @@
 package dashboards
 
 import (
-	"fmt"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -229,22 +228,22 @@ func GetDashboardFolderURL(isFolder bool, uid string, slug string) string {
 
 // GetDashboardURL returns the HTML url for a dashboard.
 func GetDashboardURL(uid string, slug string) string {
-	return fmt.Sprintf("%s/d/%s/%s", setting.AppSubUrl, uid, slug)
+	return setting.AppSubUrl + "/d/" + uid + "/" + slug
 }
 
 // GetKioskModeDashboardUrl returns the HTML url for a dashboard in kiosk mode.
 func GetKioskModeDashboardURL(uid string, slug string, theme models.Theme) string {
-	return fmt.Sprintf("%s?kiosk&theme=%s", GetDashboardURL(uid, slug), string(theme))
+	return GetDashboardURL(uid, slug) + "?kiosk&theme=" + string(theme)
 }
 
 // GetFullDashboardURL returns the full URL for a dashboard.
 func GetFullDashboardURL(uid string, slug string) string {
-	return fmt.Sprintf("%sd/%s/%s", setting.AppUrl, uid, slug)
+	return setting.AppUrl + "d/" + uid + "/" + slug
 }
 
 // GetFolderURL returns the HTML url for a folder.
 func GetFolderURL(folderUID string, slug string) string {
-	return fmt.Sprintf("%s/dashboards/f/%s/%s", setting.AppSubUrl, folderUID, slug)
+	return setting.AppSubUrl + "/dashboards/f/" + folderUID + "/" + slug
 }
 
 type ValidateDashboardBeforeSaveResult struct {

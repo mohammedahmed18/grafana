@@ -305,25 +305,38 @@ func Empty(status int) *NormalResponse {
 
 // Respond creates a response.
 func Respond(status int, body any) *NormalResponse {
-	var b []byte
 	switch t := body.(type) {
 	case []byte:
-		b = t
+		return &NormalResponse{
+			status: status,
+			body:   bytes.NewBuffer(t),
+			header: make(http.Header),
+		}
 	case string:
-		b = []byte(t)
+		buf := bytes.NewBuffer(make([]byte, 0, len(t)))
+		buf.WriteString(t)
+		return &NormalResponse{
+			status: status,
+			body:   buf,
+			header: make(http.Header),
+		}
 	case nil:
-		break
+		return &NormalResponse{
+			status: status,
+			body:   &bytes.Buffer{},
+			header: make(http.Header),
+		}
 	default:
-		var err error
-		if b, err = json.Marshal(body); err != nil {
+		jsonCfg := jsoniter.ConfigCompatibleWithStandardLibrary
+		b, err := jsonCfg.Marshal(body)
+		if err != nil {
 			return Error(http.StatusInternalServerError, "body json marshal", err)
 		}
-	}
-
-	return &NormalResponse{
-		status: status,
-		body:   bytes.NewBuffer(b),
-		header: make(http.Header),
+		return &NormalResponse{
+			status: status,
+			body:   bytes.NewBuffer(b),
+			header: make(http.Header),
+		}
 	}
 }
 

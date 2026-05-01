@@ -141,16 +141,13 @@ func (s *SearchService) SearchHandler(ctx context.Context, query *Query) (model.
 }
 
 func sortedHits(unsorted model.HitList) model.HitList {
-	hits := make(model.HitList, 0, len(unsorted))
-	hits = append(hits, unsorted...)
+	sort.Sort(unsorted)
 
-	sort.Sort(hits)
-
-	for _, hit := range hits {
+	for _, hit := range unsorted {
 		sort.Strings(hit.Tags)
 	}
 
-	return hits
+	return unsorted
 }
 
 func (s *SearchService) RegisterSortOption(option model.SortOption) {
