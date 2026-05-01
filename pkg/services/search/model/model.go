@@ -1,8 +1,9 @@
 package model
 
 import (
-	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/grafana/grafana/pkg/services/sqlstore/migrator"
 )
@@ -68,7 +69,33 @@ func (s HitList) Less(i, j int) bool {
 		return false
 	}
 
-	return strings.ToLower(s[i].Title) < strings.ToLower(s[j].Title)
+	return compareLowerCase(s[i].Title, s[j].Title) < 0
+}
+
+// compareLowerCase compares two strings case-insensitively without allocating.
+// Returns <0 if a<b, 0 if a==b, >0 if a>b (comparing lowercased runes).
+func compareLowerCase(a, b string) int {
+	for len(a) > 0 && len(b) > 0 {
+		ra, sizeA := utf8.DecodeRuneInString(a)
+		rb, sizeB := utf8.DecodeRuneInString(b)
+		la := unicode.ToLower(ra)
+		lb := unicode.ToLower(rb)
+		if la != lb {
+			if la < lb {
+				return -1
+			}
+			return 1
+		}
+		a = a[sizeA:]
+		b = b[sizeB:]
+	}
+	if len(a) < len(b) {
+		return -1
+	}
+	if len(a) > len(b) {
+		return 1
+	}
+	return 0
 }
 
 const (
