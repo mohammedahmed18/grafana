@@ -31,10 +31,9 @@ SOFTWARE.
 package slugify
 
 import (
-	"bytes"
 	"encoding/hex"
-	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	// can ignore because we don't need a cryptographically secure hash function
@@ -42,6 +41,8 @@ import (
 	// nolint:gosec
 	"crypto/sha1"
 )
+
+const hexDigits = "0123456789abcdef"
 
 var (
 	simpleSlugger = &slugger{
@@ -84,29 +85,35 @@ type slugger struct {
 
 // Slugify creates a slug for a string
 func (s slugger) Slugify(value string) string {
-	value = strings.ToLower(value)
-	var buffer bytes.Buffer
+	var b strings.Builder
+	b.Grow(len(value))
 	lastCharacterWasInvalid := false
+	started := false
 
 	for len(value) > 0 {
 		c, size := utf8.DecodeRuneInString(value)
 		value = value[size:]
 
+		// Lowercase inline instead of pre-converting the whole string
+		c = unicode.ToLower(c)
+
 		if newCharacter, ok := s.replacementMap[c]; ok {
-			if lastCharacterWasInvalid {
-				buffer.WriteRune(s.replaceCharacter)
+			if lastCharacterWasInvalid && started {
+				b.WriteByte(byte(s.replaceCharacter))
 			}
-			buffer.WriteString(newCharacter)
+			b.WriteString(newCharacter)
 			lastCharacterWasInvalid = false
+			started = true
 			continue
 		}
 
 		if s.isValidCharacter(c) {
-			if lastCharacterWasInvalid {
-				buffer.WriteRune(s.replaceCharacter)
+			if lastCharacterWasInvalid && started {
+				b.WriteByte(byte(s.replaceCharacter))
 			}
-			buffer.WriteRune(c)
+			b.WriteRune(c)
 			lastCharacterWasInvalid = false
+			started = true
 			continue
 		}
 
@@ -115,18 +122,23 @@ func (s slugger) Slugify(value string) string {
 			continue
 		}
 
-		p := make([]byte, 4)
-		size = utf8.EncodeRune(p, c)
-		if lastCharacterWasInvalid {
-			buffer.WriteRune(s.replaceCharacter)
+		var p [4]byte
+		n := utf8.EncodeRune(p[:], c)
+		if lastCharacterWasInvalid && started {
+			b.WriteByte(byte(s.replaceCharacter))
 		}
-		for i := range size {
-			buffer.WriteString(fmt.Sprintf("%x", p[i]))
+		for i := range n {
+			b.WriteByte(hexDigits[p[i]>>4])
+			b.WriteByte(hexDigits[p[i]&0x0f])
 		}
 		lastCharacterWasInvalid = true
+		started = true
 	}
 
-	return strings.Trim(buffer.String(), string(s.replaceCharacter))
+	result := b.String()
+	// Trim trailing replace character (leading is handled by 'started' flag)
+	result = strings.TrimRight(result, string(s.replaceCharacter))
+	return result
 }
 
 func getDefaultOmitments() map[rune]struct{} {
