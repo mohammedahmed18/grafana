@@ -3,14 +3,22 @@ package middleware
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	gzip "github.com/klauspost/pgzip"
 
 	"github.com/grafana/grafana/pkg/web"
 )
+
+var gzipWriterPool = sync.Pool{
+	New: func() any {
+		return gzip.NewWriter(io.Discard)
+	},
+}
 
 type gzipResponseWriter struct {
 	w *gzip.Writer
@@ -71,13 +79,17 @@ func Gziper() func(http.Handler) http.Handler {
 				return
 			}
 
-			grw := &gzipResponseWriter{gzip.NewWriter(rw), rw.(web.ResponseWriter)}
+			gz := gzipWriterPool.Get().(*gzip.Writer)
+			gz.Reset(rw)
+
+			grw := &gzipResponseWriter{gz, rw.(web.ResponseWriter)}
 			grw.Header().Set("Content-Encoding", "gzip")
 			grw.Header().Set("Vary", "Accept-Encoding")
 
 			next.ServeHTTP(grw, req)
 			// We can't really handle close errors at this point and we can't report them to the caller
-			_ = grw.w.Close()
+			_ = gz.Close()
+			gzipWriterPool.Put(gz)
 		})
 	}
 }
