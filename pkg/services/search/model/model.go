@@ -76,18 +76,39 @@ func (s HitList) Less(i, j int) bool {
 // Returns <0 if a<b, 0 if a==b, >0 if a>b (comparing lowercased runes).
 func compareLowerCase(a, b string) int {
 	for len(a) > 0 && len(b) > 0 {
-		ra, sizeA := utf8.DecodeRuneInString(a)
-		rb, sizeB := utf8.DecodeRuneInString(b)
-		la := unicode.ToLower(ra)
-		lb := unicode.ToLower(rb)
+		var la, lb rune
+
+		// Fast path for ASCII (covers the vast majority of dashboard titles)
+		if a[0] < utf8.RuneSelf {
+			la = rune(a[0])
+			if la >= 'A' && la <= 'Z' {
+				la += 'a' - 'A'
+			}
+			a = a[1:]
+		} else {
+			r, size := utf8.DecodeRuneInString(a)
+			la = unicode.ToLower(r)
+			a = a[size:]
+		}
+
+		if b[0] < utf8.RuneSelf {
+			lb = rune(b[0])
+			if lb >= 'A' && lb <= 'Z' {
+				lb += 'a' - 'A'
+			}
+			b = b[1:]
+		} else {
+			r, size := utf8.DecodeRuneInString(b)
+			lb = unicode.ToLower(r)
+			b = b[size:]
+		}
+
 		if la != lb {
 			if la < lb {
 				return -1
 			}
 			return 1
 		}
-		a = a[sizeA:]
-		b = b[sizeB:]
 	}
 	if len(a) < len(b) {
 		return -1
