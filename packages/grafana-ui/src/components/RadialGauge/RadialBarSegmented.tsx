@@ -32,7 +32,6 @@ export interface RadialBarSegmentedProps {
   gradient?: GradientStop[];
 }
 
-// Converts degrees to arc length (pixels) along a circle of given radius
 function degreesToArcLength(degrees: number, radius: number): number {
   return Math.max((degrees * Math.PI * radius) / 180, 0.01);
 }
@@ -63,7 +62,6 @@ function computeSegmentDashArray(
   const slotLen = segmentLen + gapLen;
 
   const parts: number[] = [];
-  let pendingDash = 0;
   let pendingGap = 0;
 
   for (let i = 0; i < segmentCount; i++) {
@@ -77,25 +75,57 @@ function computeSegmentDashArray(
         parts.push(0, pendingGap);
         pendingGap = 0;
       }
-      pendingDash += segmentLen;
-      pendingGap += gapLen;
+      parts.push(segmentLen, gapLen);
     } else {
-      if (pendingDash > 0) {
-        parts.push(pendingDash, pendingGap);
-        pendingDash = 0;
-        pendingGap = 0;
-      }
       pendingGap += slotLen;
     }
   }
 
-  if (pendingDash > 0) {
-    parts.push(pendingDash, pendingGap);
-  } else if (pendingGap > 0) {
+  if (pendingGap > 0) {
     parts.push(0, pendingGap);
   }
 
   return parts.join(' ');
+}
+
+/**
+ * Builds a conic-gradient with hard color stops that matches the per-segment coloring
+ * from the display processor. Each value segment gets its own color band; track
+ * segments are transparent. This replaces the old N-element approach while preserving
+ * the visual per-segment color variation (e.g. threshold colors).
+ */
+function buildPerSegmentGradient(
+  segmentCount: number,
+  angleRange: number,
+  fieldDisplay: FieldDisplay,
+  min: number,
+  max: number,
+  startValueAngle: number,
+  endValueAngle: number,
+  displayProcessor: (value: number) => { color?: string },
+  startAngle: number
+): string {
+  const slotDeg = angleRange / segmentCount;
+  const stops: string[] = [];
+
+  for (let i = 0; i < segmentCount; i++) {
+    const value = min + ((max - min) / segmentCount) * i;
+    const segmentAngle = getValuePercentageForValue(fieldDisplay, value) * angleRange;
+    const isTrack = segmentAngle < startValueAngle || segmentAngle >= startValueAngle + endValueAngle;
+
+    if (!isTrack) {
+      const color = displayProcessor(value).color ?? FALLBACK_COLOR;
+      const segStart = (slotDeg * i).toFixed(2);
+      const segEnd = (slotDeg * (i + 1)).toFixed(2);
+      stops.push(`${color} ${segStart}deg ${segEnd}deg`);
+    }
+  }
+
+  if (stops.length === 0) {
+    return `conic-gradient(from ${startAngle}deg, transparent 0deg ${angleRange}deg)`;
+  }
+
+  return `conic-gradient(from ${startAngle}deg, ${stops.join(', ')})`;
 }
 
 export const RadialBarSegmented = memo(
@@ -120,6 +150,7 @@ export const RadialBarSegmented = memo(
     const [min, max] = getFieldConfigMinMax(fieldDisplay);
     const gapDeg = getAngleBetweenSegments(segmentSpacing, segmentCount, angleRange);
     const segmentArcDeg = angleRange / segmentCountAdjusted - gapDeg;
+    const displayProcessor = getFieldDisplayProcessor(fieldDisplay);
 
     // --- Memoized geometry ---
 
@@ -148,18 +179,24 @@ export const RadialBarSegmented = memo(
     // --- Colors ---
 
     const trackColor = theme.colors.border.medium;
-    const isGradient = !!gradient;
 
-    const valueColor = useMemo(() => {
+    const gradientCss = useMemo(() => {
       if (gradient) {
-        return undefined;
+        const vizStartAngle = shape === 'circle' ? 0 : ARC_START;
+        const vizEndAngle = shape === 'circle' ? 360 : ARC_END;
+        return getGradientCss(gradient, vizStartAngle, vizEndAngle);
       }
-      const midValue = min + ((max - min) * (startValueAngle + endValueAngle / 2)) / angleRange;
-      return getFieldDisplayProcessor(fieldDisplay)(midValue).color ?? FALLBACK_COLOR;
-    }, [gradient, min, max, startValueAngle, endValueAngle, angleRange, fieldDisplay]);
+      return buildPerSegmentGradient(
+        segmentCountAdjusted, angleRange, fieldDisplay, min, max,
+        startValueAngle, endValueAngle, displayProcessor, startAngle
+      );
+    }, [
+      gradient, shape, segmentCountAdjusted, angleRange, fieldDisplay,
+      min, max, startValueAngle, endValueAngle, displayProcessor, startAngle,
+    ]);
 
     // Safari can't combine glow filters with gradient masks
-    const effectiveGlowFilter = IS_SAFARI && isGradient ? undefined : glowFilter;
+    const effectiveGlowFilter = IS_SAFARI && !!gradient ? undefined : glowFilter;
 
     // --- Shared path attributes ---
 
@@ -174,6 +211,10 @@ export const RadialBarSegmented = memo(
 
     // --- Render ---
 
+    const boxX = Math.round(centerX - radius - barWidth);
+    const boxY = Math.round(centerY - radius - barWidth);
+    const boxSize = Math.ceil((radius + barWidth) * 2);
+
     const trackPath = (
       <path
         {...sharedPathProps}
@@ -183,9 +224,26 @@ export const RadialBarSegmented = memo(
       />
     );
 
-    const valuePath = isGradient
-      ? renderGradientValue()
-      : renderSolidValue();
+    const valuePath = (
+      <>
+        <defs>
+          <mask id={maskId} maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse">
+            <rect x={0} y={0} width={vizWidth} height={vizHeight} fill="black" />
+            <path {...sharedPathProps} stroke="white" strokeDasharray={valueDashArray} />
+          </mask>
+        </defs>
+        <foreignObject
+          x={boxX}
+          y={Math.max(boxY, 0)}
+          width={Math.max(vizWidth, boxSize)}
+          height={Math.max(vizHeight, boxSize)}
+          mask={`url(#${maskId})`}
+          data-testid={selectors.components.Panels.Visualization.Gauge.Bar}
+        >
+          <div style={{ width: boxSize, height: boxSize, backgroundImage: gradientCss }} />
+        </foreignObject>
+      </>
+    );
 
     const inner = (
       <>
@@ -195,50 +253,6 @@ export const RadialBarSegmented = memo(
     );
 
     return <g>{effectiveGlowFilter ? <g filter={effectiveGlowFilter}>{inner}</g> : inner}</g>;
-
-    // --- Helpers for value rendering ---
-
-    function renderSolidValue() {
-      return (
-        <path
-          {...sharedPathProps}
-          stroke={valueColor}
-          strokeDasharray={valueDashArray}
-          data-testid={selectors.components.Panels.Visualization.Gauge.Bar}
-        />
-      );
-    }
-
-    function renderGradientValue() {
-      const vizStartAngle = shape === 'circle' ? 0 : ARC_START;
-      const vizEndAngle = shape === 'circle' ? 360 : ARC_END;
-      const gradientCss = getGradientCss(gradient!, vizStartAngle, vizEndAngle);
-
-      const boxX = Math.round(centerX - radius - barWidth);
-      const boxY = Math.round(centerY - radius - barWidth);
-      const boxSize = Math.ceil((radius + barWidth) * 2);
-
-      return (
-        <>
-          <defs>
-            <mask id={maskId} maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse">
-              <rect x={0} y={0} width={vizWidth} height={vizHeight} fill="black" />
-              <path {...sharedPathProps} stroke="white" strokeDasharray={valueDashArray} />
-            </mask>
-          </defs>
-          <foreignObject
-            x={boxX}
-            y={Math.max(boxY, 0)}
-            width={Math.max(vizWidth, boxSize)}
-            height={Math.max(vizHeight, boxSize)}
-            mask={`url(#${maskId})`}
-            data-testid={selectors.components.Panels.Visualization.Gauge.Bar}
-          >
-            <div style={{ width: boxSize, height: boxSize, backgroundImage: gradientCss }} />
-          </foreignObject>
-        </>
-      );
-    }
   }
 );
 
