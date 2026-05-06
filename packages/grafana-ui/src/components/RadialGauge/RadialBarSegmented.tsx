@@ -32,22 +32,23 @@ export interface RadialBarSegmentedProps {
   gradient?: GradientStop[];
 }
 
+// Converts degrees to arc length (pixels) along a circle of given radius
+function degreesToArcLength(degrees: number, radius: number): number {
+  return Math.max((degrees * Math.PI * radius) / 180, 0.01);
+}
+
 /**
- * Builds a dasharray that selectively shows only the segments that are "active"
- * (i.e., represent value, not track). The inactive segments are turned into gaps.
+ * Builds a stroke-dasharray string that makes only selected segments visible on a
+ * single full-span arc path. Instead of rendering N separate <path> elements, we
+ * render one path and use dasharray to "punch holes" for segments we don't want.
  *
- * For each segment i:
- *   - segmentAngle = percentage(value_at_segment_i) * angleRange
- *   - isTrack = segmentAngle < startValueAngle || segmentAngle >= startValueAngle + endValueAngle
- *   - If it's a value segment, dash = segmentArcLength, gap = gapLength
- *   - If it's a track segment, dash = 0, gap = segmentArcLength + gapLength (skip it)
- *
- * Consecutive same-type entries are merged to keep the dasharray compact.
+ * When invert=false: shows value segments, hides track segments.
+ * When invert=true: shows track segments, hides value segments.
  */
-function computeSelectiveDashArray(
+function computeSegmentDashArray(
   segmentCount: number,
-  segmentArcLengthDeg: number,
-  angleBetweenSegments: number,
+  segmentArcDeg: number,
+  gapDeg: number,
   radius: number,
   fieldDisplay: FieldDisplay,
   min: number,
@@ -57,9 +58,9 @@ function computeSelectiveDashArray(
   endValueAngle: number,
   invert: boolean
 ): string {
-  const segmentArcLength = Math.max((segmentArcLengthDeg * Math.PI * radius) / 180, 0.01);
-  const gapArcLength = Math.max((angleBetweenSegments * Math.PI * radius) / 180, 0.01);
-  const slotLength = segmentArcLength + gapArcLength;
+  const segmentLen = degreesToArcLength(segmentArcDeg, radius);
+  const gapLen = degreesToArcLength(gapDeg, radius);
+  const slotLen = segmentLen + gapLen;
 
   const parts: number[] = [];
   let pendingDash = 0;
@@ -69,28 +70,25 @@ function computeSelectiveDashArray(
     const value = min + ((max - min) / segmentCount) * i;
     const segmentAngle = getValuePercentageForValue(fieldDisplay, value) * angleRange;
     const isTrack = segmentAngle < startValueAngle || segmentAngle >= startValueAngle + endValueAngle;
-    const showThis = invert ? isTrack : !isTrack;
+    const visible = invert ? isTrack : !isTrack;
 
-    if (showThis) {
-      // Flush any pending gap before this dash
+    if (visible) {
       if (pendingGap > 0) {
         parts.push(0, pendingGap);
         pendingGap = 0;
       }
-      pendingDash += segmentArcLength;
-      pendingGap += gapArcLength;
+      pendingDash += segmentLen;
+      pendingGap += gapLen;
     } else {
-      // Flush any pending dash
       if (pendingDash > 0) {
         parts.push(pendingDash, pendingGap);
         pendingDash = 0;
         pendingGap = 0;
       }
-      pendingGap += slotLength;
+      pendingGap += slotLen;
     }
   }
 
-  // Flush remaining
   if (pendingDash > 0) {
     parts.push(pendingDash, pendingGap);
   } else if (pendingGap > 0) {
@@ -116,141 +114,116 @@ export const RadialBarSegmented = memo(
   }: RadialBarSegmentedProps) => {
     const theme = useTheme2();
     const maskId = useId();
-    const segmentCountAdjusted = getOptimalSegmentCount(dimensions, segmentSpacing, segmentCount, angleRange);
-    const [min, max] = getFieldConfigMinMax(fieldDisplay);
-    const angleBetweenSegments = getAngleBetweenSegments(segmentSpacing, segmentCount, angleRange);
-    const segmentArcLengthDeg = angleRange / segmentCountAdjusted - angleBetweenSegments;
-    const displayProcessor = getFieldDisplayProcessor(fieldDisplay);
 
     const { radius, centerX, centerY, barWidth, vizHeight, vizWidth } = dimensions;
+    const segmentCountAdjusted = getOptimalSegmentCount(dimensions, segmentSpacing, segmentCount, angleRange);
+    const [min, max] = getFieldConfigMinMax(fieldDisplay);
+    const gapDeg = getAngleBetweenSegments(segmentSpacing, segmentCount, angleRange);
+    const segmentArcDeg = angleRange / segmentCountAdjusted - gapDeg;
 
-    // Compute the full arc path spanning the entire angle range
+    // --- Memoized geometry ---
+
     const fullArcPath = useMemo(
       () => drawRadialArcPath(startAngle + 0.01, angleRange - 0.01, radius),
       [startAngle, angleRange, radius]
     );
 
-    // Selective dasharray: only value segments visible (for value path)
+    const dashArrayArgs = [
+      segmentCountAdjusted, segmentArcDeg, gapDeg, radius,
+      fieldDisplay, min, max, angleRange, startValueAngle, endValueAngle,
+    ] as const;
+
     const valueDashArray = useMemo(
-      () =>
-        computeSelectiveDashArray(
-          segmentCountAdjusted,
-          segmentArcLengthDeg,
-          angleBetweenSegments,
-          radius,
-          fieldDisplay,
-          min,
-          max,
-          angleRange,
-          startValueAngle,
-          endValueAngle,
-          false
-        ),
-      [
-        segmentCountAdjusted,
-        segmentArcLengthDeg,
-        angleBetweenSegments,
-        radius,
-        fieldDisplay,
-        min,
-        max,
-        angleRange,
-        startValueAngle,
-        endValueAngle,
-      ]
+      () => computeSegmentDashArray(...dashArrayArgs, false),
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      dashArrayArgs
     );
 
-    // Selective dasharray: only track segments visible (for track path)
     const trackDashArray = useMemo(
-      () =>
-        computeSelectiveDashArray(
-          segmentCountAdjusted,
-          segmentArcLengthDeg,
-          angleBetweenSegments,
-          radius,
-          fieldDisplay,
-          min,
-          max,
-          angleRange,
-          startValueAngle,
-          endValueAngle,
-          true
-        ),
-      [
-        segmentCountAdjusted,
-        segmentArcLengthDeg,
-        angleBetweenSegments,
-        radius,
-        fieldDisplay,
-        min,
-        max,
-        angleRange,
-        startValueAngle,
-        endValueAngle,
-      ]
+      () => computeSegmentDashArray(...dashArrayArgs, true),
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      dashArrayArgs
     );
 
-    // For non-gradient mode, determine the dominant value color.
-    // All value segments share the same gradient or a single representative color.
+    // --- Colors ---
+
+    const trackColor = theme.colors.border.medium;
+    const isGradient = !!gradient;
+
     const valueColor = useMemo(() => {
       if (gradient) {
         return undefined;
       }
-      // Use the midpoint value of the active range to pick a representative color
       const midValue = min + ((max - min) * (startValueAngle + endValueAngle / 2)) / angleRange;
-      return displayProcessor(midValue).color ?? FALLBACK_COLOR;
-    }, [gradient, min, max, startValueAngle, endValueAngle, angleRange, displayProcessor]);
+      return getFieldDisplayProcessor(fieldDisplay)(midValue).color ?? FALLBACK_COLOR;
+    }, [gradient, min, max, startValueAngle, endValueAngle, angleRange, fieldDisplay]);
 
-    const trackColor = theme.colors.border.medium;
-
-    // For gradient mode, build the CSS gradient and mask similarly to RadialArcPath
-    const isGradient = !!gradient;
-
-    const boxX = Math.round(centerX - radius - barWidth);
-    const boxY = Math.round(centerY - radius - barWidth);
-    const boxSize = Math.ceil((radius + barWidth) * 2);
-
-    // Apply glow filter, respecting the Safari workaround
+    // Safari can't combine glow filters with gradient masks
     const effectiveGlowFilter = IS_SAFARI && isGradient ? undefined : glowFilter;
+
+    // --- Shared path attributes ---
+
+    const pathTransform = `translate(${centerX}, ${centerY})`;
+    const sharedPathProps = {
+      d: fullArcPath,
+      transform: pathTransform,
+      strokeWidth: barWidth,
+      strokeLinecap: 'butt' as const,
+      fill: 'none',
+    };
+
+    // --- Render ---
 
     const trackPath = (
       <path
-        d={fullArcPath}
-        transform={`translate(${centerX}, ${centerY})`}
-        strokeWidth={barWidth}
-        strokeLinecap="butt"
-        fill="none"
+        {...sharedPathProps}
         stroke={trackColor}
         strokeDasharray={trackDashArray}
         data-testid={selectors.components.Panels.Visualization.Gauge.Track}
       />
     );
 
-    let valueContent: React.ReactNode;
+    const valuePath = isGradient
+      ? renderGradientValue()
+      : renderSolidValue();
 
-    if (isGradient) {
-      const vizStartAngle = shape === 'circle' ? 0 : ARC_START;
-      const vizEndAngle = shape === 'circle' ? 360 : ARC_END;
-      const gradientCss = getGradientCss(gradient, vizStartAngle, vizEndAngle);
+    const inner = (
+      <>
+        {trackPath}
+        {valuePath}
+      </>
+    );
 
-      const maskPathEl = (
+    return <g>{effectiveGlowFilter ? <g filter={effectiveGlowFilter}>{inner}</g> : inner}</g>;
+
+    // --- Helpers for value rendering ---
+
+    function renderSolidValue() {
+      return (
         <path
-          d={fullArcPath}
-          transform={`translate(${centerX}, ${centerY})`}
-          strokeWidth={barWidth}
-          strokeLinecap="butt"
-          fill="none"
-          stroke="white"
+          {...sharedPathProps}
+          stroke={valueColor}
           strokeDasharray={valueDashArray}
+          data-testid={selectors.components.Panels.Visualization.Gauge.Bar}
         />
       );
+    }
 
-      valueContent = (
+    function renderGradientValue() {
+      const vizStartAngle = shape === 'circle' ? 0 : ARC_START;
+      const vizEndAngle = shape === 'circle' ? 360 : ARC_END;
+      const gradientCss = getGradientCss(gradient!, vizStartAngle, vizEndAngle);
+
+      const boxX = Math.round(centerX - radius - barWidth);
+      const boxY = Math.round(centerY - radius - barWidth);
+      const boxSize = Math.ceil((radius + barWidth) * 2);
+
+      return (
         <>
           <defs>
             <mask id={maskId} maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse">
               <rect x={0} y={0} width={vizWidth} height={vizHeight} fill="black" />
-              {maskPathEl}
+              <path {...sharedPathProps} stroke="white" strokeDasharray={valueDashArray} />
             </mask>
           </defs>
           <foreignObject
@@ -261,39 +234,11 @@ export const RadialBarSegmented = memo(
             mask={`url(#${maskId})`}
             data-testid={selectors.components.Panels.Visualization.Gauge.Bar}
           >
-            <div
-              style={{
-                width: boxSize,
-                height: boxSize,
-                backgroundImage: gradientCss,
-              }}
-            />
+            <div style={{ width: boxSize, height: boxSize, backgroundImage: gradientCss }} />
           </foreignObject>
         </>
       );
-    } else {
-      valueContent = (
-        <path
-          d={fullArcPath}
-          transform={`translate(${centerX}, ${centerY})`}
-          strokeWidth={barWidth}
-          strokeLinecap="butt"
-          fill="none"
-          stroke={valueColor}
-          strokeDasharray={valueDashArray}
-          data-testid={selectors.components.Panels.Visualization.Gauge.Bar}
-        />
-      );
     }
-
-    const inner = (
-      <>
-        {trackPath}
-        {valueContent}
-      </>
-    );
-
-    return <g>{effectiveGlowFilter ? <g filter={effectiveGlowFilter}>{inner}</g> : inner}</g>;
   }
 );
 
